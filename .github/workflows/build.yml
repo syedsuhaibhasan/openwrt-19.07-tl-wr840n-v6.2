@@ -21,9 +21,9 @@ jobs:
             apt-get update &&
             apt-get install -y \
               binutils bzip2 diffutils findutils flex gawk gcc g++ \
-              getopt grep coreutils build-essential zlib1g-dev \
+              grep coreutils build-essential zlib1g-dev \
               make perl python3 python3-distutils python2 \
-              rsync subversion unzip which \
+              rsync subversion unzip \
               libncurses5-dev libncursesw5-dev libssl-dev \
               gettext xsltproc wget git file bc libelf-dev texinfo &&
             ln -sf /usr/bin/python2 /usr/bin/python &&
