@@ -1,9 +1,12 @@
-name: Build OpenWrt firmware
+name: Build OpenWrt packet-capture firmware
+
 on:
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -15,27 +18,111 @@ jobs:
 
       - name: Build inside Ubuntu 20.04 container
         run: |
-          docker run --rm -v "$PWD":/build -w /build ubuntu:20.04 bash -c "
-            export DEBIAN_FRONTEND=noninteractive &&
-            export FORCE_UNSAFE_CONFIGURE=1 &&
-            apt-get update &&
-            apt-get install -y \
-              binutils bzip2 diffutils findutils flex gawk gcc g++ \
-              grep coreutils build-essential zlib1g-dev \
-              make perl python3 python3-distutils python2 \
-              rsync subversion unzip \
-              libncurses5-dev libncursesw5-dev libssl-dev \
-              gettext xsltproc wget git file bc libelf-dev texinfo &&
-            ln -sf /usr/bin/python2 /usr/bin/python &&
-            git config --global --add safe.directory /build &&
-            ./scripts/feeds update -a &&
-            ./scripts/feeds install -a &&
-            make defconfig FORCE=1 &&
-            make -j\$(nproc) V=s FORCE=1
-          "
+          docker run --rm \
+            -v "$PWD":/build \
+            -w /build \
+            ubuntu:20.04 \
+            bash -c '
+              set -e
+
+              export DEBIAN_FRONTEND=noninteractive
+              export FORCE_UNSAFE_CONFIGURE=1
+
+              apt-get update
+
+              apt-get install -y \
+                binutils \
+                bzip2 \
+                diffutils \
+                findutils \
+                flex \
+                gawk \
+                gcc \
+                g++ \
+                grep \
+                coreutils \
+                build-essential \
+                zlib1g-dev \
+                make \
+                perl \
+                python3 \
+                python3-distutils \
+                python2 \
+                rsync \
+                subversion \
+                unzip \
+                libncurses5-dev \
+                libncursesw5-dev \
+                libssl-dev \
+                gettext \
+                xsltproc \
+                wget \
+                git \
+                file \
+                bc \
+                libelf-dev \
+                texinfo
+
+              ln -sf /usr/bin/python2 /usr/bin/python
+
+              git config --global --add safe.directory /build
+
+              ./scripts/feeds update -a
+              ./scripts/feeds install -a
+
+              # Start from the repository config, but remove the
+              # buildbot/SDK/IB/all-module options that are not needed
+              # in the final router firmware.
+              sed -i \
+                -e "/^CONFIG_ALL_KMODS=/d" \
+                -e "/^CONFIG_ALL_NONSHARED=/d" \
+                -e "/^CONFIG_DEVEL=/d" \
+                -e "/^CONFIG_BUILDBOT=/d" \
+                -e "/^CONFIG_IB=/d" \
+                -e "/^CONFIG_SDK=/d" \
+                -e "/^CONFIG_AUTOREMOVE=/d" \
+                .config
+
+              # Remove LuCI and its web-UI-only dependencies.
+              sed -i \
+                -e "/^CONFIG_PACKAGE_luci=/d" \
+                -e "/^CONFIG_PACKAGE_luci-/d" \
+                -e "/^CONFIG_PACKAGE_liblucihttp=/d" \
+                -e "/^CONFIG_PACKAGE_liblucihttp-lua=/d" \
+                -e "/^CONFIG_PACKAGE_rpcd-mod-luci=/d" \
+                -e "/^CONFIG_PACKAGE_rpcd-mod-rrdns=/d" \
+                -e "/^CONFIG_PACKAGE_cgi-io=/d" \
+                .config
+
+              # Add packet capture support.
+              cat >> .config << "EOF"
+
+              CONFIG_PACKAGE_tcpdump=y
+              CONFIG_PACKAGE_libpcap=y
+
+              # Keep SSH and the existing router web server.
+              CONFIG_PACKAGE_dropbear=y
+              CONFIG_PACKAGE_uhttpd=y
+
+              # Size optimization.
+              CONFIG_TARGET_ROOTFS_SQUASHFS=y
+              CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024
+              EOF
+
+              # Resolve dependencies and normalize the configuration.
+              make defconfig
+
+              # Build only the selected firmware/packages.
+              make -j$(nproc) V=s
+
+              echo
+              echo "===== IMAGE OUTPUT ====="
+              ls -lh bin/targets/ramips/mt76x8/
+            '
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-firmware
-          path: bin/targets/ramips/mt76x8/*
+          name: openwrt-packet-capture
+          path: |
+            bin/targets/ramips/mt76x8/*
