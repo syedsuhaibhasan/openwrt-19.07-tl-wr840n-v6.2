@@ -28,6 +28,8 @@ jobs:
               export DEBIAN_FRONTEND=noninteractive
               export FORCE_UNSAFE_CONFIGURE=1
 
+              echo "===== Installing build dependencies ====="
+
               apt-get update
 
               apt-get install -y \
@@ -67,12 +69,15 @@ jobs:
 
               git config --global --add safe.directory /build
 
+              echo "===== Updating feeds ====="
+
               ./scripts/feeds update -a
               ./scripts/feeds install -a
 
-              # Start from the repository config, but remove the
-              # buildbot/SDK/IB/all-module options that are not needed
-              # in the final router firmware.
+              echo "===== Cleaning conflicting build options ====="
+
+              # These options build large package collections/SDKs
+              # and are not needed in the router firmware.
               sed -i \
                 -e "/^CONFIG_ALL_KMODS=/d" \
                 -e "/^CONFIG_ALL_NONSHARED=/d" \
@@ -83,46 +88,92 @@ jobs:
                 -e "/^CONFIG_AUTOREMOVE=/d" \
                 .config
 
-              # Remove LuCI and its web-UI-only dependencies.
+              echo "===== Removing LuCI ====="
+
+              # Do not include LuCI on this 4 MB device.
               sed -i \
                 -e "/^CONFIG_PACKAGE_luci=/d" \
                 -e "/^CONFIG_PACKAGE_luci-/d" \
+                -e "/^CONFIG_PACKAGE_luci-base=/d" \
+                -e "/^CONFIG_PACKAGE_luci-compat=/d" \
+                -e "/^CONFIG_PACKAGE_luci-lib-/d" \
+                -e "/^CONFIG_PACKAGE_luci-mod-/d" \
+                -e "/^CONFIG_PACKAGE_luci-proto-/d" \
+                -e "/^CONFIG_PACKAGE_luci-theme-/d" \
+                -e "/^CONFIG_PACKAGE_rpcd-mod-luci=/d" \
+                -e "/^CONFIG_PACKAGE_cgi-io=/d" \
                 -e "/^CONFIG_PACKAGE_liblucihttp=/d" \
                 -e "/^CONFIG_PACKAGE_liblucihttp-lua=/d" \
-                -e "/^CONFIG_PACKAGE_rpcd-mod-luci=/d" \
-                -e "/^CONFIG_PACKAGE_rpcd-mod-rrdns=/d" \
-                -e "/^CONFIG_PACKAGE_cgi-io=/d" \
                 .config
 
-              # Add packet capture support.
+              echo "===== Adding packet-capture packages ====="
+
               cat >> .config << "EOF"
 
               CONFIG_PACKAGE_tcpdump=y
               CONFIG_PACKAGE_libpcap=y
 
-              # Keep SSH and the existing router web server.
               CONFIG_PACKAGE_dropbear=y
+              CONFIG_PACKAGE_iw=y
               CONFIG_PACKAGE_uhttpd=y
-
-              # Size optimization.
-              CONFIG_TARGET_ROOTFS_SQUASHFS=y
-              CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024
               EOF
 
-              # Resolve dependencies and normalize the configuration.
+              echo "===== Resolving configuration ====="
+
               make defconfig
 
-              # Build only the selected firmware/packages.
+              echo "===== Verifying selected packages ====="
+
+              grep -E \
+                "CONFIG_PACKAGE_(tcpdump|libpcap|dropbear|iw|uhttpd)=" \
+                .config || true
+
+              echo "===== Building firmware ====="
+
               make -j$(nproc) V=s
 
-              echo
-              echo "===== IMAGE OUTPUT ====="
-              ls -lh bin/targets/ramips/mt76x8/
+              echo "===== BUILD COMPLETE ====="
+
+              echo "===== Firmware images ====="
+
+              find /build/bin/targets/ramips/mt76x8 \
+                -type f \
+                \( -name "*.bin" -o -name "*.manifest" -o -name "*.buildinfo" \) \
+                -print \
+                -exec ls -lh {} \;
+
+              echo "===== Checking generated manifest ====="
+
+              find /build/bin/targets/ramips/mt76x8 \
+                -type f \
+                -name "*.manifest" \
+                -exec sh -c "echo ===== {} =====; cat {}" \;
             '
+
+      - name: Verify firmware output
+        run: |
+          echo "===== Firmware output on GitHub runner ====="
+
+          if [ ! -d "bin/targets/ramips/mt76x8" ]; then
+            echo "ERROR: OpenWrt output directory does not exist."
+            echo "Searching for generated firmware..."
+            find bin -type f -name "*.bin" -print || true
+            exit 1
+          fi
+
+          find bin/targets/ramips/mt76x8 \
+            -maxdepth 1 \
+            -type f \
+            \( -name "*.bin" -o -name "*.manifest" -o -name "*.buildinfo" \) \
+            -print \
+            -exec ls -lh {} \;
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: openwrt-packet-capture
           path: |
-            bin/targets/ramips/mt76x8/*
+            bin/targets/ramips/mt76x8/*.bin
+            bin/targets/ramips/mt76x8/*.manifest
+            bin/targets/ramips/mt76x8/*.buildinfo
+          if-no-files-found: error
